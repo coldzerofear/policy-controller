@@ -43,6 +43,7 @@ import (
 	policycontrollerconfig "github.com/sigstore/policy-controller/pkg/config"
 	pctuf "github.com/sigstore/policy-controller/pkg/tuf"
 	webhookcip "github.com/sigstore/policy-controller/pkg/webhook/clusterimagepolicy"
+	"github.com/sigstore/policy-controller/pkg/webhook/gm"
 	"github.com/sigstore/policy-controller/pkg/webhook/registryauth"
 	rekor "github.com/sigstore/rekor/pkg/client"
 	"github.com/sigstore/rekor/pkg/generated/client"
@@ -479,6 +480,12 @@ func asFieldError(warn bool, err error) *apis.FieldError {
 // kc is the Keychain to use for fetching ConfigFile that's independent of the
 // signatures / attestations.
 func ValidatePolicy(ctx context.Context, namespace string, ref name.Reference, cip webhookcip.ClusterImagePolicy, kc authn.Keychain, remoteOpts ...ociremote.Option) (*PolicyResult, []error) {
+	// Carry CIP annotations down to the signature dispatch in validation.valid().
+	// This is the ONLY plumbing the GM extension needs from the upstream call
+	// path — it lets us route to pkg/webhook/gm without changing any function
+	// signatures. CIPs without GM annotations pass through unchanged.
+	ctx = gm.WithCIPAnnotations(ctx, cip.Annotations)
+
 	// Check the cache and return if hit, otherwise, check the policy
 	cacheResult := FromContext(ctx).Get(ctx, ref.String(), string(cip.UID), cip.ResourceVersion)
 	if cacheResult != nil {

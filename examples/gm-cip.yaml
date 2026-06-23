@@ -1,0 +1,52 @@
+# 国密 (Chinese national crypto, SM2/SM3) ClusterImagePolicy 示例
+#
+# 跟上游 ClusterImagePolicy 的区别：所有 GM-specific 配置都在
+# metadata.annotations 里（zjrcu.gm/* 命名空间），spec 部分完全沿用上游
+# schema。这样 CRD schema 不变，rebase upstream 几乎不冲突，没启用 GM 的
+# 集群跟原版 policy-controller 行为完全一致。
+#
+# 工作流程：
+#   1. 这个 CIP 的 metadata.annotations 标了 zjrcu.gm/algorithm=SM2-with-SM3
+#      → webhook 路由到 pkg/webhook/gm 的 GM 验签器。
+#   2. GM 验签器拉镜像的签名工件（cosign 兼容,Referrers + tag-based 双轨,
+#      跟默认 cosign 路径完全一样）。
+#   3. 对每个 sig 工件，比对它的 layer annotations 上的 signer 三元组
+#      (zjrcu.gm/signer-app-id, signer-node-id, user-id) 跟本 CIP 上配的
+#      期望值——不匹配直接拒，不调 HSM。
+#   4. 匹配的话，对签名 payload 跑 SM3 哈希，调 HSM /sm2/verify HTTP
+#      接口（URL 模板 + tenant-id + signer 三元组都从 annotations 拼出来）。
+#   5. HSM 返 verified=true → 通过。
+#
+# spec.authorities[].key.data 留空就行——本 CIP 信任的 SM2 公钥实际由 HSM
+# 平台侧账本管理，靠 (app-id, node-id) → 私钥的映射做验签。data 字段保留是
+# 给将来"本地交叉校验"或"切到 offline verify"预留空间。
+
+apiVersion: policy.sigstore.dev/v1beta1
+kind: ClusterImagePolicy
+metadata:
+  name: gm-zjrcu-harbor
+  annotations:
+    # ──────────── 必填 ────────────
+    zjrcu.gm/algorithm: SM2-with-SM3
+    zjrcu.gm/verify-url: "http://158.218.101.121:28080/fc-api/v3.0/{tenantId}/{appId}/sm2/verify"
+    zjrcu.gm/tenant-id: vc02efvv9vqgam0j
+    zjrcu.gm/app-id: "00013310"
+    zjrcu.gm/node-id: "0101"
+
+    # ──────────── 可选 ────────────
+    # 配上以后 sig 的 user-id 必须严格匹配；不配则任意 user-id 都过
+    zjrcu.gm/user-id: "1234567812345678"
+    # HSM 调用超时，默认 5000
+    # zjrcu.gm/request-timeout-ms: "8000"
+
+spec:
+  images:
+    - glob: "harbor.zjrcu.com/**"
+    - glob: "tcaas-harbor.zrubdev/**"
+
+  authorities:
+    - name: zjrcu-gm
+      key:
+        # SM2 public key PEM (optional, reserved for future offline verify)
+        # 实际验签靠 HSM /sm2/verify，data 留空也行
+        data: ""

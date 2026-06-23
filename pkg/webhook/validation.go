@@ -33,10 +33,20 @@ import (
 	ociremote "github.com/sigstore/cosign/v3/pkg/oci/remote"
 	"github.com/sigstore/cosign/v3/pkg/oci/static"
 	policycontrollerconfig "github.com/sigstore/policy-controller/pkg/config"
+	"github.com/sigstore/policy-controller/pkg/webhook/gm"
 	"github.com/sigstore/sigstore/pkg/signature"
 )
 
 func valid(ctx context.Context, ref name.Reference, keys []crypto.PublicKey, hashAlgo crypto.Hash, checkOpts *cosign.CheckOpts) ([]oci.Signature, error) {
+	// GM (国密) dispatch: when the CIP's annotations declare the SM2-with-SM3
+	// algorithm, route verification through pkg/webhook/gm — it fetches the
+	// same sig artifacts cosign would, matches signer triples against the CIP
+	// annotations, then calls the HSM /sm2/verify HTTP endpoint. The default
+	// cosign path is completely untouched for CIPs that don't opt in.
+	if cipAnn := gm.CIPAnnotationsFromContext(ctx); gm.IsGmCIP(cipAnn) {
+		return gm.Verify(ctx, ref, cipAnn, checkOpts)
+	}
+
 	if len(keys) == 0 {
 		return validSignatures(ctx, ref, checkOpts)
 	}

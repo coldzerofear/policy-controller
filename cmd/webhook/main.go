@@ -31,6 +31,7 @@ import (
 	policycontrollerconfig "github.com/sigstore/policy-controller/pkg/config"
 	"github.com/sigstore/policy-controller/pkg/reconciler/clusterimagepolicy"
 	"github.com/sigstore/policy-controller/pkg/reconciler/trustroot"
+	"github.com/sigstore/policy-controller/pkg/webhook/gm"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -138,6 +139,12 @@ func main() {
 	// Set the policy and trust root resync periods
 	ctx = clusterimagepolicy.ToContext(ctx, *policyResyncPeriod)
 	ctx = pctuf.ToContext(ctx, *trustrootResyncPeriod)
+
+	// Inject the GM (国密) HSM client into the root context. ALL HSM call
+	// configuration (URL template, tenant id, expected signer triple) is
+	// declared per-CIP via annotations — the client itself only owns the
+	// http.Client + transport. CIPs without GM annotations don't touch it.
+	ctx = gm.WithClient(ctx, gm.NewClient())
 
 	// This must match the set of resources we configure in
 	// cmd/webhook/main.go in the "types" map.

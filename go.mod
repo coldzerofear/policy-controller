@@ -51,6 +51,13 @@ require (
 
 require github.com/spf13/cobra v1.10.2
 
+// 国密 (Chinese national crypto) SM3 implementation used by pkg/webhook/gm.
+// Pure Go, no cgo, multi-arch friendly. Byte-compatible with BouncyCastle
+// SM3Digest and vendor wcspsdk Java SDK on GM/T 0004-2012 official test
+// vectors plus production-shape Simple Signing payloads (verified in
+// gm-sign-cli/spike-go/sm3-compat).
+require github.com/emmansun/gmsm v0.32.4
+
 require (
 	github.com/Azure/azure-sdk-for-go v68.0.0+incompatible
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.21.0

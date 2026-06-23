@@ -47,6 +47,12 @@ type ClusterImagePolicy struct {
 	// ResourceVersion can be used to know if the CIP has been modified
 	ResourceVersion string `json:"resourceVersion"`
 
+	// Annotations carries CIP-level annotations forward into the webhook runtime
+	// representation. Used by the GM (国密) extension to read its dispatch keys
+	// (e.g. zjrcu.gm/algorithm) without modifying the upstream CRD schema.
+	// See pkg/webhook/gm.
+	Annotations map[string]string `json:"annotations,omitempty"`
+
 	Images      []v1alpha1.ImagePattern `json:"images"`
 	Authorities []Authority             `json:"authorities"`
 	// Policy is an optional policy used to evaluate the results of valid
@@ -303,6 +309,7 @@ func ConvertClusterImagePolicyV1alpha1ToWebhook(in *v1alpha1.ClusterImagePolicy)
 	return &ClusterImagePolicy{
 		UID:             copyIn.UID,
 		ResourceVersion: copyIn.ResourceVersion,
+		Annotations:     copyIn.Annotations,
 		Images:          copyIn.Spec.Images,
 		Authorities:     outAuthorities,
 		Policy:          cipAttestationPolicy,
