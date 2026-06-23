@@ -55,6 +55,13 @@ const (
 	// AnnRequestTimeoutMS overrides the default HSM call timeout (5000ms).
 	// Plain integer, milliseconds.
 	AnnRequestTimeoutMS = "zjrcu.gm/request-timeout-ms"
+
+	// AnnCacheTTLSeconds opts a CIP out of the process-wide positive-result
+	// cache. Set to "0" to bypass the cache entirely (every admission round
+	// hits HSM). Empty / unset means "use default" (cache hits are eligible).
+	// Phase 2 only honors the disable case ("0"); per-CIP custom TTLs are
+	// deferred to Phase 3 (would need per-entry expiry tracking).
+	AnnCacheTTLSeconds = "zjrcu.gm/cache-ttl-seconds"
 )
 
 // ── Sig artifact (镜像签名工件) layer annotations — written by gmctl, read here ──
@@ -99,4 +106,14 @@ const (
 	// DefaultRequestTimeoutMS is the HSM call timeout when neither the CIP
 	// AnnRequestTimeoutMS nor a programmatic override is provided.
 	DefaultRequestTimeoutMS = 5000
+
+	// DefaultCacheCapacity is the LRU bound for the positive-verify cache.
+	// 4096 × ~64 bytes ≈ 256 KB. Tunable via cmd/webhook/main.go.
+	DefaultCacheCapacity = 4096
+
+	// DefaultCacheTTLSeconds is the per-entry validity window for cached
+	// positive verifies. 30s is short enough that cert/key rotations
+	// invalidate the cache promptly without explicit purging, and long
+	// enough to absorb typical Pod-bursts (node restart, deployment scale).
+	DefaultCacheTTLSeconds = 30
 )

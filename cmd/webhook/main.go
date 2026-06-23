@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"time"
 
 	policyduckv1beta1 "github.com/sigstore/policy-controller/pkg/apis/duck/v1beta1"
@@ -146,6 +147,16 @@ func main() {
 	// http.Client + transport. CIPs without GM annotations don't touch it.
 	ctx = gm.WithClient(ctx, gm.NewClient())
 
+	// Process-wide positive-verify cache. Cap + TTL come from env so ops can
+	// tune without rebuild. Defaults: 4096 entries, 30s TTL (see gm/constants.go).
+	// Setting GM_CACHE_TTL_SECONDS=0 disables the cache entirely — every
+	// admission round will then hit HSM (per-CIP opt-out via the
+	// zjrcu.gm/cache-ttl-seconds annotation is still honored regardless).
+	cacheCap := envInt("GM_CACHE_CAPACITY", gm.DefaultCacheCapacity)
+	cacheTTL := time.Duration(envInt("GM_CACHE_TTL_SECONDS", gm.DefaultCacheTTLSeconds)) * time.Second
+	ctx = gm.WithCache(ctx, gm.NewCache(cacheCap, cacheTTL))
+	logging.FromContext(ctx).Infof("GM positive-verify cache: capacity=%d ttl=%s", cacheCap, cacheTTL)
+
 	// This must match the set of resources we configure in
 	// cmd/webhook/main.go in the "types" map.
 	common.ValidResourceNames = sets.NewString("replicasets", "deployments",
@@ -165,6 +176,22 @@ func main() {
 		NewPolicyMutatingAdmissionController,
 		newConversionController,
 	)
+}
+
+// envInt reads a non-negative int from env; falls back to def when unset or
+// malformed. Used to thread tuning knobs into the GM cache without flag
+// bloat. Negative values aren't accepted — they're treated as "use default"
+// to keep semantics narrow (0 is meaningful = "disable cache").
+func envInt(key string, def int) int {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return def
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil || v < 0 {
+		return def
+	}
+	return v
 }
 
 var (

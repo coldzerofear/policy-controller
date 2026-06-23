@@ -48,10 +48,18 @@ func Verify(
 		return nil, fmt.Errorf("GM verifier requested by CIP but HSM Client not initialized; " +
 			"check that cmd/webhook/main.go calls gm.WithClient on startup")
 	}
+	// cache is optional — nil means "no memoization, every call hits HSM"
+	cache := CacheFromContext(ctx)
 
 	cfg, err := ParseCIPAnnotations(cipAnnotations)
 	if err != nil {
 		return nil, fmt.Errorf("GM CIP misconfigured: %w", err)
+	}
+	// CIP-level opt-out: zjrcu.gm/cache-ttl-seconds=0 forces every admission
+	// to call HSM directly even if a process-wide cache is configured. Used
+	// for high-sensitivity policies where 30s stale-trust is unacceptable.
+	if cfg.CacheDisabled {
+		cache = nil
 	}
 
 	sigs, err := fetchSignatures(ref, checkOpts)
@@ -113,7 +121,14 @@ func Verify(
 			}
 		}
 
-		// (d) SM3 + HSM verify
+		// (d) cache lookup before paying the HSM round-trip
+		if cache.Lookup(sigBytes, cfg.ExpectedSigner) {
+			verified = append(verified, sig)
+			logger.Debugf("GM verify cache hit for %s sig[%d]", ref.Name(), i)
+			continue
+		}
+
+		// (e) SM3 + HSM verify (cache miss path)
 		sm3Hash := SM3(payload)
 		ok, err := client.SM2Verify(ctx, VerifyRequest{
 			URLTemplate: cfg.URLTemplate,
@@ -124,16 +139,22 @@ func Verify(
 			TimeoutMS:   cfg.RequestTimeoutMS,
 		})
 		if err != nil {
+			// Transport / 5xx / business error — DO NOT cache. A cached false
+			// would mean a single HSM hiccup blocks legit admissions for the
+			// full TTL window.
 			lastErr = fmt.Errorf("sig[%d] HSM call: %w", i, err)
 			logger.Debug(lastErr.Error())
 			continue
 		}
 		if !ok {
+			// Negative verify result — DO NOT cache. Reasoning above.
 			lastErr = fmt.Errorf("sig[%d] HSM returned not-verified", i)
 			logger.Debug(lastErr.Error())
 			continue
 		}
 
+		// (f) only positive results are memoized
+		cache.Store(sigBytes, cfg.ExpectedSigner)
 		verified = append(verified, sig)
 		logger.Debugf("GM verify passed for %s sig[%d]", ref.Name(), i)
 	}

@@ -20,6 +20,12 @@ type CIPConfig struct {
 
 	// RequestTimeoutMS overrides Client.SM2Verify's default. Zero = default.
 	RequestTimeoutMS int
+
+	// CacheDisabled is true when the CIP set AnnCacheTTLSeconds to "0",
+	// requesting that every admission round skip the positive-verify cache
+	// and call HSM directly. Empty / unset annotation leaves this false
+	// (default = cache enabled per the process-wide TTL).
+	CacheDisabled bool
 }
 
 // IsGmCIP returns true when the CIP's annotations declare the GM algorithm.
@@ -83,6 +89,18 @@ func ParseCIPAnnotations(cipAnnotations map[string]string) (*CIPConfig, error) {
 				AnnRequestTimeoutMS, raw)
 		}
 		cfg.RequestTimeoutMS = ms
+	}
+
+	// AnnCacheTTLSeconds: only the disable case ("0") is honored in Phase 2.
+	// Empty/unset = use process-wide default. Any positive value is accepted
+	// for forward-compatibility but currently ignored.
+	if raw := cipAnnotations[AnnCacheTTLSeconds]; raw != "" {
+		secs, err := strconv.Atoi(raw)
+		if err != nil || secs < 0 {
+			return nil, fmt.Errorf("CIP annotation %s=%q must be a non-negative integer",
+				AnnCacheTTLSeconds, raw)
+		}
+		cfg.CacheDisabled = secs == 0
 	}
 
 	return cfg, nil

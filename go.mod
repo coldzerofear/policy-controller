@@ -58,6 +58,11 @@ require github.com/spf13/cobra v1.10.2
 // gm-sign-cli/spike-go/sm3-compat).
 require github.com/emmansun/gmsm v0.32.4
 
+// LRU + TTL cache for pkg/webhook/gm to memoize HSM /sm2/verify results
+// (positive only) across admission requests. Already a transitive dep —
+// just promoted to direct so it's obvious we rely on it.
+require github.com/hashicorp/golang-lru/v2 v2.0.7
+
 require (
 	github.com/Azure/azure-sdk-for-go v68.0.0+incompatible
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.21.0
