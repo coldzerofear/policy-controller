@@ -47,12 +47,6 @@ type ClusterImagePolicy struct {
 	// ResourceVersion can be used to know if the CIP has been modified
 	ResourceVersion string `json:"resourceVersion"`
 
-	// Annotations carries CIP-level annotations forward into the webhook runtime
-	// representation. Used by the GM (国密) extension to read its dispatch keys
-	// (e.g. zjrcu.gm/algorithm) without modifying the upstream CRD schema.
-	// See pkg/webhook/gm.
-	Annotations map[string]string `json:"annotations,omitempty"`
-
 	Images      []v1alpha1.ImagePattern `json:"images"`
 	Authorities []Authority             `json:"authorities"`
 	// Policy is an optional policy used to evaluate the results of valid
@@ -92,8 +86,39 @@ type Authority struct {
 	Attestations []AttestationPolicy `json:"attestations,omitempty"`
 	// +optional
 	RFC3161Timestamp *RFC3161Timestamp `json:"rfc3161timestamp,omitempty"`
+	// GMSignature configures verification against the 国密 (Chinese national
+	// crypto) HSM platform. Sibling to Key / Keyless / Static; dispatched
+	// in pkg/webhook/validator.go ValidatePolicySignaturesForAuthority.
+	// See pkg/webhook/gm for the verifier implementation.
+	// +optional
+	GMSignature *GMSignatureRef `json:"gmSignature,omitempty"`
 	// +optional
 	SignatureFormat string `json:"signatureFormat,omitempty"`
+}
+
+// GMSignatureRef is the webhook runtime form of the GMSignature CRD field.
+// Mirrors v1alpha1.GMSignatureRef / v1beta1.GMSignatureRef.
+type GMSignatureRef struct {
+	// VerifyURL is the HSM /sm2/verify endpoint URL template containing
+	// {tenantId} and {appId} placeholders.
+	VerifyURL string `json:"verifyUrl"`
+	// TenantID substitutes {tenantId} + sent as Tenant-Id HTTP header.
+	TenantID string `json:"tenantId"`
+	// Signer is the expected three-tuple matched against sig artifact
+	// annotations before any HSM call.
+	Signer GMSignerRef `json:"signer"`
+	// RequestTimeoutMs defaults to 5000 when zero.
+	// +optional
+	RequestTimeoutMs int `json:"requestTimeoutMs,omitempty"`
+}
+
+// GMSignerRef identifies the expected HSM signer.
+type GMSignerRef struct {
+	AppID  string `json:"appId"`
+	NodeID string `json:"nodeId"`
+	// UserID is optional — when set the sig's user-id must match.
+	// +optional
+	UserID string `json:"userId,omitempty"`
 }
 
 // This references a public verification key stored in
@@ -309,7 +334,6 @@ func ConvertClusterImagePolicyV1alpha1ToWebhook(in *v1alpha1.ClusterImagePolicy)
 	return &ClusterImagePolicy{
 		UID:             copyIn.UID,
 		ResourceVersion: copyIn.ResourceVersion,
-		Annotations:     copyIn.Annotations,
 		Images:          copyIn.Spec.Images,
 		Authorities:     outAuthorities,
 		Policy:          cipAttestationPolicy,
@@ -324,6 +348,7 @@ func convertAuthorityV1Alpha1ToWebhook(in v1alpha1.Authority) *Authority {
 	staticRef := convertStaticRefV1Alpha1ToWebhook(in.Static)
 	attestations := convertAttestationsV1Alpha1ToWebhook(in.Attestations)
 	rfc3161Timestamp := convertRFC3161TimestampV1Alpha1ToWebhook(in.RFC3161Timestamp)
+	gmSignature := convertGMSignatureRefV1Alpha1ToWebhook(in.GMSignature)
 
 	return &Authority{
 		Name:             in.Name,
@@ -334,7 +359,24 @@ func convertAuthorityV1Alpha1ToWebhook(in v1alpha1.Authority) *Authority {
 		CTLog:            in.CTLog,
 		RFC3161Timestamp: rfc3161Timestamp,
 		Attestations:     attestations,
+		GMSignature:      gmSignature,
 		SignatureFormat:  in.SignatureFormat,
+	}
+}
+
+func convertGMSignatureRefV1Alpha1ToWebhook(in *v1alpha1.GMSignatureRef) *GMSignatureRef {
+	if in == nil {
+		return nil
+	}
+	return &GMSignatureRef{
+		VerifyURL:        in.VerifyURL,
+		TenantID:         in.TenantID,
+		RequestTimeoutMs: in.RequestTimeoutMs,
+		Signer: GMSignerRef{
+			AppID:  in.Signer.AppID,
+			NodeID: in.Signer.NodeID,
+			UserID: in.Signer.UserID,
+		},
 	}
 }
 

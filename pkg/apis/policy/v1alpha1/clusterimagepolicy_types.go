@@ -144,10 +144,71 @@ type Authority struct {
 	// RFC3161Timestamp sets the configuration to verify the signature timestamp against a RFC3161 time-stamping instance.
 	// +optional
 	RFC3161Timestamp *RFC3161Timestamp `json:"rfc3161timestamp,omitempty"`
+	// GMSignature configures verification against the 国密 (Chinese national
+	// crypto) HSM platform. When set, this Authority verifies images signed
+	// by gmctl (SM2 signature over SM3 hash of cosign Simple Signing payload).
+	// Sibling to Key/Keyless/Static — dispatched by ValidatePolicySignaturesForAuthority.
+	// +optional
+	GMSignature *GMSignatureRef `json:"gmSignature,omitempty"`
 	// SignatureFormat specifies the format the authority expects. Supported
 	// formats are "legacy" and "bundle". If not specified, the default
 	// is "legacy" (cosign's default).
 	SignatureFormat string `json:"signatureFormat,omitempty"`
+}
+
+// GMSignatureRef configures 国密 (Chinese national crypto, SM2/SM3) signature
+// verification via a remote HSM platform. The webhook fetches signature
+// artifacts the same way cosign does (Referrers + tag-based fallback), then
+// for each sig:
+//
+//  1. Matches the sig's signer annotations (zjrcu.gm/signer-*) against
+//     the Signer triple here. Mismatch -> reject before any HSM call,
+//     so unauthorized signers are gated without a network round-trip.
+//  2. Computes SM3 of the sig's Simple Signing payload bytes locally.
+//  3. POSTs (sm3Hash, sigBytes, signer-triple) to the HSM at the URL
+//     produced by substituting {tenantId}+{appId} into VerifyURL.
+//
+// CIPs that don't set GMSignature behave exactly as in upstream — the GM
+// extension is fully opt-in.
+type GMSignatureRef struct {
+	// VerifyURL is the HSM /sm2/verify endpoint URL template. Must contain
+	// the {tenantId} and {appId} placeholders, which are substituted at
+	// request time using TenantID and Signer.AppID respectively.
+	// Example:
+	//   http://158.218.101.121:28080/fc-api/v3.0/{tenantId}/{appId}/sm2/verify
+	VerifyURL string `json:"verifyUrl"`
+
+	// TenantID is the HSM platform tenant identifier. Substituted into
+	// VerifyURL's {tenantId} placeholder and also sent as the Tenant-Id
+	// HTTP header (the HSM API requires both).
+	TenantID string `json:"tenantId"`
+
+	// Signer is the expected (app-id, node-id, [user-id]) triple. The sig
+	// artifact's annotations MUST match this triple; mismatched signers
+	// are rejected pre-HSM.
+	Signer GMSignerRef `json:"signer"`
+
+	// RequestTimeoutMs is the per-HSM-call timeout in milliseconds.
+	// Defaults to 5000 when zero or unset.
+	// +optional
+	RequestTimeoutMs int `json:"requestTimeoutMs,omitempty"`
+}
+
+// GMSignerRef identifies the expected signer on the HSM platform. The HSM
+// holds the SM2 private key; this triple is the lookup key on the HSM side.
+type GMSignerRef struct {
+	// AppID is the HSM-side app id (例 "00013310"). Substituted into
+	// VerifyURL's {appId} placeholder.
+	AppID string `json:"appId"`
+
+	// NodeID is the HSM-side node id (例 "0101").
+	NodeID string `json:"nodeId"`
+
+	// UserID is the HSM-side user id (例 "1234567812345678").
+	// Optional — when set, the sig artifact's user-id annotation must
+	// match; when unset, any user-id passes the gate.
+	// +optional
+	UserID string `json:"userId,omitempty"`
 }
 
 // This references a public verification key stored in

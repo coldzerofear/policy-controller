@@ -480,12 +480,6 @@ func asFieldError(warn bool, err error) *apis.FieldError {
 // kc is the Keychain to use for fetching ConfigFile that's independent of the
 // signatures / attestations.
 func ValidatePolicy(ctx context.Context, namespace string, ref name.Reference, cip webhookcip.ClusterImagePolicy, kc authn.Keychain, remoteOpts ...ociremote.Option) (*PolicyResult, []error) {
-	// Carry CIP annotations down to the signature dispatch in validation.valid().
-	// This is the ONLY plumbing the GM extension needs from the upstream call
-	// path — it lets us route to pkg/webhook/gm without changing any function
-	// signatures. CIPs without GM annotations pass through unchanged.
-	ctx = gm.WithCIPAnnotations(ctx, cip.Annotations)
-
 	// Check the cache and return if hit, otherwise, check the policy
 	cacheResult := FromContext(ctx).Get(ctx, ref.String(), string(cip.UID), cip.ResourceVersion)
 	if cacheResult != nil {
@@ -826,6 +820,19 @@ func ValidatePolicySignaturesForAuthority(ctx context.Context, ref name.Referenc
 			return nil, fmt.Errorf("signature TSA validation failed for authority %s for %s: %w", name, ref.Name(), err)
 		}
 		logging.FromContext(ctx).Debugf("validated TSA signature for %s, got %d signatures", ref.Name(), len(sps))
+		return ociSignatureToPolicySignature(ctx, sps), nil
+
+	case authority.GMSignature != nil:
+		// 国密 (Chinese national crypto) verifier — SM2 signature over SM3
+		// hash of the cosign Simple Signing payload, verified by a remote
+		// HSM HTTP call. Fully self-contained in pkg/webhook/gm; doesn't
+		// touch the cosign verifier interface (no local SM2 key, HSM holds it).
+		sps, err := gm.Verify(ctx, ref, authority.GMSignature, checkOpts)
+		if err != nil {
+			logging.FromContext(ctx).Errorf("failed GM verify for authority %s for %s: %v", name, ref.Name(), err)
+			return nil, fmt.Errorf("GM signature validation failed for authority %s for %s: %w", name, ref.Name(), err)
+		}
+		logging.FromContext(ctx).Debugf("validated GM signature for %s for authority %s got %d signatures", ref.Name(), authority.Name, len(sps))
 		return ociSignatureToPolicySignature(ctx, sps), nil
 	}
 

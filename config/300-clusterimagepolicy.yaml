@@ -122,6 +122,39 @@ spec:
                           url:
                             description: URL sets the url to the rekor instance (by default the public rekor.sigstore.dev)
                             type: string
+                      gmSignature:
+                        description: 国密 (Chinese national crypto) SM2/SM3 signature verification via a remote HSM platform. When set, this Authority verifies images signed by gmctl. Sibling to Key/Keyless/Static; CIPs without gmSignature behave exactly as in upstream cosign.
+                        type: object
+                        required:
+                          - verifyUrl
+                          - tenantId
+                          - signer
+                        properties:
+                          verifyUrl:
+                            description: HSM /sm2/verify endpoint URL template containing {tenantId} and {appId} placeholders. Example "http://host:port/fc-api/v3.0/{tenantId}/{appId}/sm2/verify"
+                            type: string
+                          tenantId:
+                            description: HSM tenant identifier. Substituted into VerifyURL's {tenantId} placeholder and sent as the Tenant-Id HTTP header.
+                            type: string
+                          signer:
+                            description: Expected (app-id, node-id, [user-id]) triple. The sig artifact's annotations MUST match this triple; mismatched signers are rejected before any HSM call.
+                            type: object
+                            required:
+                              - appId
+                              - nodeId
+                            properties:
+                              appId:
+                                description: HSM-side app id. Substituted into VerifyURL's {appId} placeholder.
+                                type: string
+                              nodeId:
+                                description: HSM-side node id.
+                                type: string
+                              userId:
+                                description: HSM-side user id. Optional — when set, the sig artifact's user-id annotation must match; when unset, any user-id passes.
+                                type: string
+                          requestTimeoutMs:
+                            description: Per-HSM-call timeout in milliseconds. Defaults to 5000 when zero or unset.
+                            type: integer
                       key:
                         description: Key defines the type of key to validate the image.
                         type: object
@@ -461,6 +494,39 @@ spec:
                           url:
                             description: URL sets the url to the rekor instance (by default the public rekor.sigstore.dev)
                             type: string
+                      gmSignature:
+                        description: 国密 (Chinese national crypto) SM2/SM3 signature verification via a remote HSM platform. When set, this Authority verifies images signed by gmctl. Sibling to Key/Keyless/Static; CIPs without gmSignature behave exactly as in upstream cosign.
+                        type: object
+                        required:
+                          - verifyUrl
+                          - tenantId
+                          - signer
+                        properties:
+                          verifyUrl:
+                            description: HSM /sm2/verify endpoint URL template containing {tenantId} and {appId} placeholders. Example "http://host:port/fc-api/v3.0/{tenantId}/{appId}/sm2/verify"
+                            type: string
+                          tenantId:
+                            description: HSM tenant identifier. Substituted into VerifyURL's {tenantId} placeholder and sent as the Tenant-Id HTTP header.
+                            type: string
+                          signer:
+                            description: Expected (app-id, node-id, [user-id]) triple. The sig artifact's annotations MUST match this triple; mismatched signers are rejected before any HSM call.
+                            type: object
+                            required:
+                              - appId
+                              - nodeId
+                            properties:
+                              appId:
+                                description: HSM-side app id. Substituted into VerifyURL's {appId} placeholder.
+                                type: string
+                              nodeId:
+                                description: HSM-side node id.
+                                type: string
+                              userId:
+                                description: HSM-side user id. Optional — when set, the sig artifact's user-id annotation must match; when unset, any user-id passes.
+                                type: string
+                          requestTimeoutMs:
+                            description: Per-HSM-call timeout in milliseconds. Defaults to 5000 when zero or unset.
+                            type: integer
                       key:
                         description: Key defines the type of key to validate the image.
                         type: object

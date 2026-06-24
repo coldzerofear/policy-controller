@@ -115,56 +115,6 @@ func TestCache_NilReceiver(t *testing.T) {
 	}
 }
 
-func TestParseCIPAnnotations_CacheDisableFlag(t *testing.T) {
-	base := map[string]string{
-		AnnAlgorithm: AlgorithmSM2SM3,
-		AnnVerifyURL: "http://hsm/{tenantId}/{appId}/sm2/verify",
-		AnnTenantID:  "t1",
-		AnnAppID:     "app1",
-		AnnNodeID:    "node1",
-	}
-
-	t.Run("unset -> CacheDisabled false", func(t *testing.T) {
-		cfg, err := ParseCIPAnnotations(base)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if cfg.CacheDisabled {
-			t.Error("missing annotation should leave caching enabled")
-		}
-	})
-
-	t.Run("zero -> CacheDisabled true", func(t *testing.T) {
-		ann := cloneMap(base)
-		ann[AnnCacheTTLSeconds] = "0"
-		cfg, err := ParseCIPAnnotations(ann)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !cfg.CacheDisabled {
-			t.Error("zero annotation should disable cache")
-		}
-	})
-
-	t.Run("positive int -> CacheDisabled false (accepted for fwd-compat)", func(t *testing.T) {
-		ann := cloneMap(base)
-		ann[AnnCacheTTLSeconds] = "60"
-		cfg, err := ParseCIPAnnotations(ann)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if cfg.CacheDisabled {
-			t.Error("positive ttl should not disable cache")
-		}
-	})
-
-	t.Run("negative or malformed -> error", func(t *testing.T) {
-		for _, bad := range []string{"-1", "abc", "30.5"} {
-			ann := cloneMap(base)
-			ann[AnnCacheTTLSeconds] = bad
-			if _, err := ParseCIPAnnotations(ann); err == nil {
-				t.Errorf("expected error for %s=%q", AnnCacheTTLSeconds, bad)
-			}
-		}
-	})
-}
+// Per-CIP cache disable is now an env-only knob (GM_CACHE_TTL_SECONDS=0).
+// CRD-field-based GMSignatureRef intentionally has no cache toggle —
+// caching is a process-wide resource, not per-authority. See verify.go.

@@ -186,9 +186,13 @@ func TestSM2Verify_HTTPNon200(t *testing.T) {
 }
 
 func TestSM2Verify_ContextTimeout(t *testing.T) {
-	// A server that never replies, to exercise the per-call timeout path.
-	hangSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		<-r.Context().Done()
+	// Server that sleeps longer than the client timeout. Using a fixed
+	// sleep instead of <-r.Context().Done() because Go's net/http server
+	// doesn't propagate client-side connection close to r.Context() across
+	// all platforms reliably, which can leave the handler goroutine hung
+	// even after the client has timed out and moved on.
+	hangSrv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		time.Sleep(2 * time.Second)
 	}))
 	defer hangSrv.Close()
 

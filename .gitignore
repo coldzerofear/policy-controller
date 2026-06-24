@@ -40,3 +40,4 @@ gha-creds-*.json
 
 # Kind cluster configuration produced by the local-dev tool
 kind.yaml
+vendor/

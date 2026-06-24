@@ -56,7 +56,7 @@ require github.com/spf13/cobra v1.10.2
 // SM3Digest and vendor wcspsdk Java SDK on GM/T 0004-2012 official test
 // vectors plus production-shape Simple Signing payloads (verified in
 // gm-sign-cli/spike-go/sm3-compat).
-require github.com/emmansun/gmsm v0.32.4
+require github.com/emmansun/gmsm v0.43.0
 
 // LRU + TTL cache for pkg/webhook/gm to memoize HSM /sm2/verify results
 // (positive only) across admission requests. Already a transitive dep —

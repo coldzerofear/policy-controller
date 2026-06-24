@@ -143,10 +143,52 @@ type Authority struct {
 	// RFC3161Timestamp sets the configuration to verify the signature timestamp against a RFC3161 time-stamping instance.
 	// +optional
 	RFC3161Timestamp *RFC3161Timestamp `json:"rfc3161timestamp,omitempty"`
+	// GMSignature configures verification against the 国密 (Chinese national
+	// crypto) HSM platform. When set, this Authority verifies images signed
+	// by gmctl (SM2 signature over SM3 hash of cosign Simple Signing payload).
+	// Sibling to Key/Keyless/Static — dispatched by ValidatePolicySignaturesForAuthority.
+	// +optional
+	GMSignature *GMSignatureRef `json:"gmSignature,omitempty"`
 	// SignatureFormat specifies the format the authority expects. Supported
 	// formats are "legacy" and "bundle". If not specified, the default
 	// is "legacy" (cosign's default).
 	SignatureFormat string `json:"signatureFormat,omitempty"`
+}
+
+// GMSignatureRef configures 国密 (Chinese national crypto, SM2/SM3) signature
+// verification via a remote HSM platform. See pkg/webhook/gm package docs.
+type GMSignatureRef struct {
+	// VerifyURL is the HSM /sm2/verify endpoint URL template. Must contain
+	// {tenantId} and {appId} placeholders.
+	VerifyURL string `json:"verifyUrl"`
+
+	// TenantID is the HSM tenant identifier. Substituted into VerifyURL's
+	// {tenantId} placeholder and sent as the Tenant-Id HTTP header.
+	TenantID string `json:"tenantId"`
+
+	// Signer is the expected three-tuple. Sig artifact annotations must
+	// match; otherwise the sig is rejected before any HSM call.
+	Signer GMSignerRef `json:"signer"`
+
+	// RequestTimeoutMs is the per-HSM-call timeout in milliseconds.
+	// Defaults to 5000 when zero.
+	// +optional
+	RequestTimeoutMs int `json:"requestTimeoutMs,omitempty"`
+}
+
+// GMSignerRef identifies the expected signer on the HSM platform.
+type GMSignerRef struct {
+	// AppID is the HSM-side app id. Substituted into VerifyURL's {appId}.
+	AppID string `json:"appId"`
+
+	// NodeID is the HSM-side node id.
+	NodeID string `json:"nodeId"`
+
+	// UserID is the HSM-side user id. Optional — when set, the sig
+	// artifact's user-id annotation must match; when unset, any user-id
+	// passes the gate.
+	// +optional
+	UserID string `json:"userId,omitempty"`
 }
 
 // This references a public verification key stored in

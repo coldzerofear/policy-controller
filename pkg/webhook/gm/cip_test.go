@@ -1,119 +1,80 @@
 package gm
 
-import "testing"
+import (
+	"testing"
 
-func TestIsGmCIP(t *testing.T) {
-	cases := map[string]struct {
-		annotations map[string]string
-		want        bool
-	}{
-		"nil map -> false (default cosign path untouched)": {
-			annotations: nil, want: false,
-		},
-		"empty map -> false": {
-			annotations: map[string]string{}, want: false,
-		},
-		"correct algorithm -> true": {
-			annotations: map[string]string{AnnAlgorithm: AlgorithmSM2SM3}, want: true,
-		},
-		"different algorithm name -> false (no fuzzy match)": {
-			annotations: map[string]string{AnnAlgorithm: "sm2-sm3"}, want: false,
-		},
-		"algorithm key present but empty -> false": {
-			annotations: map[string]string{AnnAlgorithm: ""}, want: false,
-		},
-	}
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			if got := IsGmCIP(tc.annotations); got != tc.want {
-				t.Errorf("IsGmCIP(%v) = %v, want %v", tc.annotations, got, tc.want)
-			}
-		})
-	}
-}
+	webhookcip "github.com/sigstore/policy-controller/pkg/webhook/clusterimagepolicy"
+)
 
-func TestParseCIPAnnotations(t *testing.T) {
-	ok := map[string]string{
-		AnnAlgorithm: AlgorithmSM2SM3,
-		AnnVerifyURL: "http://hsm/{tenantId}/{appId}/sm2/verify",
-		AnnTenantID:  "t1",
-		AnnAppID:     "app1",
-		AnnNodeID:    "node1",
+func TestValidate(t *testing.T) {
+	good := &webhookcip.GMSignatureRef{
+		VerifyURL: "http://hsm/{tenantId}/{appId}/sm2/verify",
+		TenantID:  "t1",
+		Signer:    webhookcip.GMSignerRef{AppID: "app1", NodeID: "node1"},
 	}
 
-	t.Run("required fields parse OK", func(t *testing.T) {
-		cfg, err := ParseCIPAnnotations(ok)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if cfg.TenantID != "t1" || cfg.ExpectedSigner.AppID != "app1" ||
-			cfg.ExpectedSigner.NodeID != "node1" {
-			t.Errorf("parsed cfg = %+v", cfg)
-		}
-		if cfg.ExpectedSigner.UserID != "" {
-			t.Errorf("UserID should default empty, got %q", cfg.ExpectedSigner.UserID)
-		}
-		if cfg.RequestTimeoutMS != 0 {
-			t.Errorf("RequestTimeoutMS should default 0 (uses client default), got %d", cfg.RequestTimeoutMS)
+	t.Run("complete config -> nil", func(t *testing.T) {
+		if err := Validate(good); err != nil {
+			t.Errorf("unexpected error: %v", err)
 		}
 	})
 
-	t.Run("optional fields propagate", func(t *testing.T) {
-		annotations := cloneMap(ok)
-		annotations[AnnUserID] = "u1"
-		annotations[AnnRequestTimeoutMS] = "3500"
-		cfg, err := ParseCIPAnnotations(annotations)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if cfg.ExpectedSigner.UserID != "u1" {
-			t.Errorf("UserID = %q, want u1", cfg.ExpectedSigner.UserID)
-		}
-		if cfg.RequestTimeoutMS != 3500 {
-			t.Errorf("RequestTimeoutMS = %d, want 3500", cfg.RequestTimeoutMS)
+	t.Run("nil ref -> error", func(t *testing.T) {
+		if err := Validate(nil); err == nil {
+			t.Error("expected error for nil ref")
 		}
 	})
 
-	t.Run("missing required field -> error", func(t *testing.T) {
-		for _, missing := range []string{AnnVerifyURL, AnnTenantID, AnnAppID, AnnNodeID} {
-			annotations := cloneMap(ok)
-			delete(annotations, missing)
-			if _, err := ParseCIPAnnotations(annotations); err == nil {
-				t.Errorf("expected error when %s missing", missing)
-			}
+	t.Run("missing VerifyURL -> error", func(t *testing.T) {
+		ref := *good
+		ref.VerifyURL = ""
+		if err := Validate(&ref); err == nil {
+			t.Error("expected error")
 		}
 	})
 
-	t.Run("non-GM CIP -> error (caller should have checked IsGmCIP first)", func(t *testing.T) {
-		annotations := map[string]string{AnnAlgorithm: "ecdsa"}
-		if _, err := ParseCIPAnnotations(annotations); err == nil {
-			t.Error("expected error for non-GM CIP")
+	t.Run("missing TenantID -> error", func(t *testing.T) {
+		ref := *good
+		ref.TenantID = ""
+		if err := Validate(&ref); err == nil {
+			t.Error("expected error")
 		}
 	})
 
-	t.Run("invalid timeout -> error", func(t *testing.T) {
-		annotations := cloneMap(ok)
-		annotations[AnnRequestTimeoutMS] = "not-a-number"
-		if _, err := ParseCIPAnnotations(annotations); err == nil {
-			t.Error("expected error for malformed timeout")
+	t.Run("missing Signer.AppID -> error", func(t *testing.T) {
+		ref := *good
+		ref.Signer.AppID = ""
+		if err := Validate(&ref); err == nil {
+			t.Error("expected error")
 		}
-		annotations[AnnRequestTimeoutMS] = "0"
-		if _, err := ParseCIPAnnotations(annotations); err == nil {
-			t.Error("expected error for non-positive timeout")
+	})
+
+	t.Run("missing Signer.NodeID -> error", func(t *testing.T) {
+		ref := *good
+		ref.Signer.NodeID = ""
+		if err := Validate(&ref); err == nil {
+			t.Error("expected error")
+		}
+	})
+
+	t.Run("Signer.UserID unset is OK (optional pin)", func(t *testing.T) {
+		ref := *good
+		ref.Signer.UserID = ""
+		if err := Validate(&ref); err != nil {
+			t.Errorf("UserID should be optional: %v", err)
 		}
 	})
 }
 
 func TestMatchSigner(t *testing.T) {
-	cfg := &CIPConfig{
-		ExpectedSigner: SignerTriple{
-			AppID:  "app1",
-			NodeID: "node1",
-			UserID: "u1",
-		},
+	cipPinnedUser := &webhookcip.GMSignatureRef{
+		Signer: webhookcip.GMSignerRef{AppID: "app1", NodeID: "node1", UserID: "u1"},
+	}
+	cipNoUser := &webhookcip.GMSignatureRef{
+		Signer: webhookcip.GMSignerRef{AppID: "app1", NodeID: "node1"},
 	}
 
-	good := map[string]string{
+	goodSig := map[string]string{
 		SigAnnAlg:          AlgorithmSM2SM3,
 		SigAnnSignerAppID:  "app1",
 		SigAnnSignerNodeID: "node1",
@@ -121,51 +82,64 @@ func TestMatchSigner(t *testing.T) {
 	}
 
 	t.Run("matching triple -> nil", func(t *testing.T) {
-		if err := cfg.MatchSigner(good); err != nil {
+		if err := MatchSigner(cipPinnedUser, goodSig); err != nil {
 			t.Errorf("expected nil, got %v", err)
 		}
 	})
 
-	t.Run("wrong algorithm -> error", func(t *testing.T) {
-		bad := cloneMap(good)
+	t.Run("wrong algorithm -> reject (sig misrouted)", func(t *testing.T) {
+		bad := cloneMap(goodSig)
 		bad[SigAnnAlg] = "ecdsa"
-		if err := cfg.MatchSigner(bad); err == nil {
+		if err := MatchSigner(cipPinnedUser, bad); err == nil {
 			t.Error("expected mismatch error")
 		}
 	})
 
-	t.Run("wrong app-id -> error", func(t *testing.T) {
-		bad := cloneMap(good)
+	t.Run("missing algorithm annotation -> reject", func(t *testing.T) {
+		bad := cloneMap(goodSig)
+		delete(bad, SigAnnAlg)
+		if err := MatchSigner(cipPinnedUser, bad); err == nil {
+			t.Error("expected mismatch error")
+		}
+	})
+
+	t.Run("wrong app-id -> reject (pre-HSM gate)", func(t *testing.T) {
+		bad := cloneMap(goodSig)
 		bad[SigAnnSignerAppID] = "different-app"
-		if err := cfg.MatchSigner(bad); err == nil {
+		if err := MatchSigner(cipPinnedUser, bad); err == nil {
 			t.Error("expected mismatch error")
 		}
 	})
 
-	t.Run("wrong node-id -> error", func(t *testing.T) {
-		bad := cloneMap(good)
+	t.Run("wrong node-id -> reject", func(t *testing.T) {
+		bad := cloneMap(goodSig)
 		bad[SigAnnSignerNodeID] = "different-node"
-		if err := cfg.MatchSigner(bad); err == nil {
+		if err := MatchSigner(cipPinnedUser, bad); err == nil {
 			t.Error("expected mismatch error")
 		}
 	})
 
-	t.Run("CIP pins user-id, sig user-id differs -> error", func(t *testing.T) {
-		bad := cloneMap(good)
+	t.Run("CIP pins user-id, sig user-id differs -> reject", func(t *testing.T) {
+		bad := cloneMap(goodSig)
 		bad[SigAnnUserID] = "different-user"
-		if err := cfg.MatchSigner(bad); err == nil {
+		if err := MatchSigner(cipPinnedUser, bad); err == nil {
 			t.Error("expected mismatch error")
 		}
 	})
 
-	t.Run("CIP doesn't pin user-id -> any sig user-id passes", func(t *testing.T) {
-		cfgNoUser := &CIPConfig{
-			ExpectedSigner: SignerTriple{AppID: "app1", NodeID: "node1"},
-		}
-		anyUser := cloneMap(good)
+	t.Run("CIP unpinned user-id, any sig user-id passes", func(t *testing.T) {
+		anyUser := cloneMap(goodSig)
 		anyUser[SigAnnUserID] = "anyone"
-		if err := cfgNoUser.MatchSigner(anyUser); err != nil {
-			t.Errorf("expected nil when CIP user-id unset, got %v", err)
+		if err := MatchSigner(cipNoUser, anyUser); err != nil {
+			t.Errorf("unpinned user-id should accept anything: %v", err)
+		}
+	})
+
+	t.Run("CIP unpinned user-id, sig also missing user-id passes", func(t *testing.T) {
+		noUserSig := cloneMap(goodSig)
+		delete(noUserSig, SigAnnUserID)
+		if err := MatchSigner(cipNoUser, noUserSig); err != nil {
+			t.Errorf("both unpinned should match: %v", err)
 		}
 	})
 }

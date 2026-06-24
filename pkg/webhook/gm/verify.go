@@ -10,38 +10,45 @@ import (
 	"github.com/sigstore/cosign/v3/pkg/cosign"
 	"github.com/sigstore/cosign/v3/pkg/oci"
 	ociremote "github.com/sigstore/cosign/v3/pkg/oci/remote"
+	webhookcip "github.com/sigstore/policy-controller/pkg/webhook/clusterimagepolicy"
 	"knative.dev/pkg/logging"
 )
 
-// Verify is the GM entry point that mirrors the shape of validation.valid()'s
-// return contract: it returns the subset of signatures that verified.
+// Verify is the GM entry point called from ValidatePolicySignaturesForAuthority
+// when `authority.GMSignature != nil`. Returns the subset of signatures that
+// verified — mirroring the contract of validation.valid() / cosign.VerifyImageSignatures.
 //
 // Flow:
 //  1. Fetch all signatures attached to ref via cosign's SDK (Referrers +
 //     tag-based fallback, the same discovery upstream uses).
 //  2. For each signature:
 //     a. Pre-gate: the sig's annotations must declare zjrcu.gm/alg = SM2-with-SM3
-//        and match the CIP's expected signer triple (rejects unauthorized
-//        signers before any HSM call).
-//     b. Read the SM2 signature (prefer zjrcu.gm/signature annotation, fall
-//        back to the cosign-standard base64 sig — both are written by gmctl).
-//     c. Replay-check: cosign's SimpleClaimVerifier ensures the payload's
-//        critical.image.docker-manifest-digest equals the image digest. We
-//        let cosign do that piece via SimpleClaimVerifier later, OR we can
-//        inline it. For PoC we inline it as cosign's verifier needs the
-//        ECDSA key it doesn't have.
-//     d. SM3-hash the payload bytes, call HSM /sm2/verify.
-//  3. Return all signatures that passed (b) (c) (d).
+//        and match the CIP's expected signer triple. Rejects unauthorized
+//        signers before any HSM round-trip.
+//     b. Read the SM2 signature bytes (prefer the zjrcu.gm/signature annotation,
+//        fall back to the cosign-standard base64 sig — both are written by gmctl).
+//     c. Simple Signing replay check: payload's
+//        critical.image.docker-manifest-digest must equal the image's digest.
+//        Prevents a valid sig from image A being reused on image B.
+//     d. Cache lookup before the HSM call (Phase 2 — bounded TTL LRU).
+//     e. SM3-hash payload + POST (sm3Hash, sig, signer-triple) to HSM /sm2/verify.
+//     f. On positive HSM result, populate the cache and record the sig as verified.
+//  3. Return all signatures that survived all five steps. Any one survivor
+//     verifies the image.
 //
-// Returns an error only when no sig verified AND every sig produced an error
-// — partial verify (any one sig OK) is treated as success.
+// Returns an error only when no sig verified AND every sig produced an error.
+// Partial verify (any one sig OK) is treated as success.
 func Verify(
 	ctx context.Context,
 	ref name.Reference,
-	cipAnnotations map[string]string,
+	cipGM *webhookcip.GMSignatureRef,
 	checkOpts *cosign.CheckOpts,
 ) ([]oci.Signature, error) {
 	logger := logging.FromContext(ctx)
+
+	if err := Validate(cipGM); err != nil {
+		return nil, fmt.Errorf("CIP misconfigured: %w", err)
+	}
 
 	client := ClientFromContext(ctx)
 	if client == nil {
@@ -50,17 +57,6 @@ func Verify(
 	}
 	// cache is optional — nil means "no memoization, every call hits HSM"
 	cache := CacheFromContext(ctx)
-
-	cfg, err := ParseCIPAnnotations(cipAnnotations)
-	if err != nil {
-		return nil, fmt.Errorf("GM CIP misconfigured: %w", err)
-	}
-	// CIP-level opt-out: zjrcu.gm/cache-ttl-seconds=0 forces every admission
-	// to call HSM directly even if a process-wide cache is configured. Used
-	// for high-sensitivity policies where 30s stale-trust is unacceptable.
-	if cfg.CacheDisabled {
-		cache = nil
-	}
 
 	sigs, err := fetchSignatures(ref, checkOpts)
 	if err != nil {
@@ -71,6 +67,12 @@ func Verify(
 	}
 
 	imageDigest := digestString(ref)
+	expectedSigner := SignerTriple{
+		AppID:  cipGM.Signer.AppID,
+		NodeID: cipGM.Signer.NodeID,
+		UserID: cipGM.Signer.UserID,
+	}
+
 	var verified []oci.Signature
 	var lastErr error
 
@@ -82,7 +84,7 @@ func Verify(
 			continue
 		}
 		// (a) gate on signer triple — fail-fast before any HSM call
-		if err := cfg.MatchSigner(annotations); err != nil {
+		if err := MatchSigner(cipGM, annotations); err != nil {
 			lastErr = fmt.Errorf("sig[%d] signer mismatch: %w", i, err)
 			logger.Debug(lastErr.Error())
 			continue
@@ -122,7 +124,7 @@ func Verify(
 		}
 
 		// (d) cache lookup before paying the HSM round-trip
-		if cache.Lookup(sigBytes, cfg.ExpectedSigner) {
+		if cache.Lookup(sigBytes, expectedSigner) {
 			verified = append(verified, sig)
 			logger.Debugf("GM verify cache hit for %s sig[%d]", ref.Name(), i)
 			continue
@@ -131,12 +133,12 @@ func Verify(
 		// (e) SM3 + HSM verify (cache miss path)
 		sm3Hash := SM3(payload)
 		ok, err := client.SM2Verify(ctx, VerifyRequest{
-			URLTemplate: cfg.URLTemplate,
-			TenantID:    cfg.TenantID,
-			Signer:      cfg.ExpectedSigner,
+			URLTemplate: cipGM.VerifyURL,
+			TenantID:    cipGM.TenantID,
+			Signer:      expectedSigner,
 			SM3Hash:     sm3Hash,
 			Signature:   sigBytes,
-			TimeoutMS:   cfg.RequestTimeoutMS,
+			TimeoutMS:   cipGM.RequestTimeoutMs,
 		})
 		if err != nil {
 			// Transport / 5xx / business error — DO NOT cache. A cached false
@@ -154,7 +156,7 @@ func Verify(
 		}
 
 		// (f) only positive results are memoized
-		cache.Store(sigBytes, cfg.ExpectedSigner)
+		cache.Store(sigBytes, expectedSigner)
 		verified = append(verified, sig)
 		logger.Debugf("GM verify passed for %s sig[%d]", ref.Name(), i)
 	}
@@ -184,8 +186,8 @@ func fetchSignatures(ref name.Reference, checkOpts *cosign.CheckOpts) ([]oci.Sig
 }
 
 // digestString returns the digest portion of ref when it's a name.Digest,
-// or "" when it's a tag-form reference (the policy-controller flow guarantees
-// digest form by the time we get here, but be defensive).
+// or "" when it's a tag-form reference. policy-controller's webhook flow
+// guarantees digest form by the time we get here, but be defensive.
 func digestString(ref name.Reference) string {
 	if d, ok := ref.(name.Digest); ok {
 		return d.DigestStr()

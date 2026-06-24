@@ -145,6 +145,18 @@ func (authority *Authority) ConvertTo(ctx context.Context, sink *v1beta1.Authori
 			Message: authority.Static.Message,
 		}
 	}
+	if authority.GMSignature != nil {
+		sink.GMSignature = &v1beta1.GMSignatureRef{
+			VerifyURL:        authority.GMSignature.VerifyURL,
+			TenantID:         authority.GMSignature.TenantID,
+			RequestTimeoutMs: authority.GMSignature.RequestTimeoutMs,
+			Signer: v1beta1.GMSignerRef{
+				AppID:  authority.GMSignature.Signer.AppID,
+				NodeID: authority.GMSignature.Signer.NodeID,
+				UserID: authority.GMSignature.Signer.UserID,
+			},
+		}
+	}
 	return nil
 }
 
@@ -299,6 +311,18 @@ func (authority *Authority) ConvertFrom(ctx context.Context, source *v1beta1.Aut
 		authority.Static = &StaticRef{
 			Action:  source.Static.Action,
 			Message: source.Static.Message,
+		}
+	}
+	if source.GMSignature != nil {
+		authority.GMSignature = &GMSignatureRef{
+			VerifyURL:        source.GMSignature.VerifyURL,
+			TenantID:         source.GMSignature.TenantID,
+			RequestTimeoutMs: source.GMSignature.RequestTimeoutMs,
+			Signer: GMSignerRef{
+				AppID:  source.GMSignature.Signer.AppID,
+				NodeID: source.GMSignature.Signer.NodeID,
+				UserID: source.GMSignature.Signer.UserID,
+			},
 		}
 	}
 	return nil
