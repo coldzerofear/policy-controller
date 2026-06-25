@@ -76,6 +76,18 @@ spec:
         - name: HOME
           value: "/var/run/sigstore"
 
+        # ── 国密 (GM) 验签器调优 ──
+        # 这些 env 变量是 pkg/webhook/gm 启动期读的(cmd/webhook/main.go)。
+        # CIPs 不带 GMSignature 字段的话这些 env 完全不影响,跟上游行为一致。
+        - name: GM_CACHE_CAPACITY
+          # 正向 verify 结果缓存的 LRU 上限。每条 ~64 字节;4096 ≈ 256 KB。
+          # 0 = 全局关缓存(每次都打 HSM)。
+          value: "4096"
+        - name: GM_CACHE_TTL_SECONDS
+          # 每条 cache entry 有效期。30s 短到 cert 轮换很快失效,长到能吸
+          # 收 Pod-burst(节点重启、Deployment scale)。0 = 关缓存。
+          value: "30"
+
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true
