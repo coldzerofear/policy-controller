@@ -1,0 +1,157 @@
+name: Release
+
+# 触发:推 v* tag(如 v0.1.0、v0.1.0-rc1)
+# 产出:
+#   1. ghcr.io/<owner>/policy-controller:<tag> — 多架构 manifest list(linux/amd64 + linux/arm64)
+#   2. GitHub Release 附带 policy-controller-<tag>.yaml
+#      已经把 config/ 下所有 ko://... 占位符替换成真实的 image digest,
+#      运维一行 `kubectl apply -f policy-controller-<tag>.yaml` 就能部署
+#
+# 跟上游 release.yaml 区别:
+#   - 镜像推 ghcr.io 而非 gcr.io/projectsigstore(你 fork 不需要 GCP credentials)
+#   - 不调 cosign / sigstore 自签自验链路(只是镜像,合规上 gmctl sign 才是签名的事)
+#   - 不调 goreleaser(过度复杂,我们只要 image + 部署 YAML 两件产物)
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build (e.g. v0.1.0). 仅 workflow_dispatch 时使用'
+        required: true
+
+permissions:
+  contents: write   # 写 Release
+  packages: write   # 推 ghcr.io
+
+env:
+  IMAGE_REPO: ghcr.io/${{ github.repository_owner }}/policy-controller
+
+jobs:
+  release:
+    name: Build & publish
+    runs-on: ubuntu-latest
+    steps:
+      # GH Actions runner 默认 30GB free,但 ko + ko-cache + multi-arch 可能塞满
+      - name: Free disk space (drop Android + .NET + Haskell preinstalled)
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+        with:
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: false
+          swap-storage: false
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0       # ldflags 拿 git describe 需要全 history
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache: true
+
+      - name: Set up ko
+        uses: ko-build/setup-ko@v0.9
+        with:
+          version: v0.18.0      # 锁版本避免上游漂移
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute version + ldflags
+        id: vars
+        run: |
+          REF="${{ inputs.tag || github.ref_name }}"
+          GIT_HASH="$(git rev-parse HEAD)"
+          GIT_VERSION="${REF}"
+          GIT_TREESTATE="clean"
+          BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          LDFLAGS="-buildid= \
+            -X sigs.k8s.io/release-utils/version.gitVersion=${GIT_VERSION} \
+            -X sigs.k8s.io/release-utils/version.gitCommit=${GIT_HASH} \
+            -X sigs.k8s.io/release-utils/version.gitTreeState=${GIT_TREESTATE} \
+            -X sigs.k8s.io/release-utils/version.buildDate=${BUILD_DATE}"
+          echo "ref_name=${REF}" >> $GITHUB_OUTPUT
+          echo "git_hash=${GIT_HASH}" >> $GITHUB_OUTPUT
+          {
+            echo "ldflags<<EOF"
+            echo "$LDFLAGS"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      # ko resolve 干两件事:
+      #   1. 构建并 push 多架构镜像到 KO_DOCKER_REPO,产出 image digest
+      #   2. 读 config/ 下所有 yaml,把 image: ko://... 替换成真实 digest ref,
+      #      合并输出到一个 stdout
+      # --bare 让镜像 tag 名是干净的 <repo>:<tag>,不带 importpath 拼装
+      # --tags ${ref_name},${git_hash} 同时打 vXXX 和 sha 两个 tag,方便回滚
+      - name: ko resolve (build + push image + render deploy YAML)
+        env:
+          KO_DOCKER_REPO: ${{ env.IMAGE_REPO }}
+          GIT_HASH: ${{ steps.vars.outputs.git_hash }}
+          GIT_VERSION: ${{ steps.vars.outputs.ref_name }}
+          LDFLAGS: ${{ steps.vars.outputs.ldflags }}
+        run: |
+          mkdir -p dist
+          # Note: --platform=all 会自动按 ko.yaml 的 builders 跑 amd64+arm64
+          ko resolve \
+            --bare \
+            --platform=linux/amd64,linux/arm64 \
+            --tags="${GIT_VERSION},${GIT_HASH}" \
+            -f config/ \
+            > dist/policy-controller-${GIT_VERSION}.yaml
+          ls -lh dist/
+          echo ""
+          echo "=== Image refs in resolved manifest ==="
+          grep -E "image:\s" dist/policy-controller-${GIT_VERSION}.yaml || true
+
+      - name: SHA256 the deploy YAML
+        working-directory: dist
+        run: |
+          sha256sum policy-controller-*.yaml > policy-controller-${{ steps.vars.outputs.ref_name }}.yaml.sha256
+          cat policy-controller-*.sha256
+
+      - name: Create / update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.vars.outputs.ref_name }}
+          name: ${{ steps.vars.outputs.ref_name }}
+          generate_release_notes: true
+          files: |
+            dist/*.yaml
+            dist/*.sha256
+          body: |
+            ## Container image (multi-arch)
+
+            ```
+            docker pull ${{ env.IMAGE_REPO }}:${{ steps.vars.outputs.ref_name }}
+            ```
+
+            Or pin to commit digest (immutable):
+
+            ```
+            docker pull ${{ env.IMAGE_REPO }}:${{ steps.vars.outputs.git_hash }}
+            ```
+
+            ## Deploy to a K8s cluster
+
+            ```bash
+            curl -L -O https://github.com/${{ github.repository }}/releases/download/${{ steps.vars.outputs.ref_name }}/policy-controller-${{ steps.vars.outputs.ref_name }}.yaml
+            sha256sum -c policy-controller-${{ steps.vars.outputs.ref_name }}.yaml.sha256
+            kubectl apply -f policy-controller-${{ steps.vars.outputs.ref_name }}.yaml
+            kubectl -n cosign-system get pods
+            ```
+
+            CIP 示例(国密 SM2/SM3 验签):见
+            [`examples/gm-cip.yaml`](https://github.com/${{ github.repository }}/blob/${{ steps.vars.outputs.ref_name }}/examples/gm-cip.yaml)
