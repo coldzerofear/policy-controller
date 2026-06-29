@@ -49,6 +49,9 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0       # ldflags 拿 git describe 需要全 history
+          fetch-tags: true     # actions/checkout v4 默认不 fetch tags;不开这个的话
+                               # checkout step 在 push:tag 触发时也找不到 ref,会报
+                               # "A branch or tag with the name 'vX.Y.Z' could not be found"
 
       - name: Set up Go
         uses: actions/setup-go@v5
