@@ -29,8 +29,12 @@ jobs:
           check-latest: true
           cache: true
 
+      # Scope to our code only. third_party/VENDOR-LICENSE/ is a tarball of
+      # third-party source bundled for license compliance — it doesn't get
+      # built/linked, and some of it (hashicorp/vault, hashicorp/go-sockaddr)
+      # fails vet on modern Go. `./...` walks into it and breaks the build.
       - name: Vet
-        run: go vet ./...
+        run: go vet ./cmd/... ./pkg/...
 
       # 跑单元测试,不跑 kind 集群 e2e(那个 upstream 也有,fork 不需要重做)
       - name: Unit tests
