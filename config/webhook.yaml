@@ -45,11 +45,16 @@ spec:
         # and substituted here.
         image: ko://github.com/sigstore/policy-controller/cmd/webhook
         args: [
-          # Uncomment these to initialize with a custom TUF root.
-          # TODO: How to specify the entire TUF directory for multiple
-          # TUF roots.
-          #"--tuf-mirror", "http://tuf.tuf-system.svc",
-          #"--tuf-root", "/var/run/tuf/root.json",
+          # ─────────────────────────────────────────────────────────────
+          # 国密 (GM) fork 的默认值:关掉 TUF。
+          # TUF 是 sigstore 给 cosign keyless / Fulcio / Rekor 用的信任根
+          # 分发机制,启动期会去 tuf-repo-cdn.sigstore.dev 拉 root.json。
+          # 我们用 HSM SM2 验签,不走 Fulcio/Rekor 链路,TUF 对我们无用;
+          # 而且测试 / 内网环境往往连不到 sigstore.dev,TUF init 会 panic
+          # 导致 webhook pod 启动直接挂(`no such host`)。
+          # 如果哪天需要 keyless 流程,把这行删掉,再配 tuf-mirror / tuf-root。
+          "--disable-tuf",
+          # ─────────────────────────────────────────────────────────────
           # Uncomment to customize ClusterImagePolicy resync period
           # "--policy-resync-period", "10h",
         ]
