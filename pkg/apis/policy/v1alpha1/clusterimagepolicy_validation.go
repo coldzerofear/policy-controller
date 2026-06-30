@@ -77,19 +77,27 @@ func (image *ImagePattern) Validate(_ context.Context) *apis.FieldError {
 
 func (authority *Authority) Validate(ctx context.Context) *apis.FieldError {
 	var errs *apis.FieldError
-	if authority.Key == nil && authority.Keyless == nil && authority.Static == nil {
-		errs = errs.Also(apis.ErrMissingOneOf("key", "keyless", "static"))
-		// Instead of returning all the missing subfields, just return here
-		// to give a more concise and arguably a more meaningful error message.
-		return errs
+	// Authority must declare exactly one signature-verifier type. Count
+	// non-nil ones — see v1beta1 for the same shape; GMSignature was added
+	// for the 国密 fork.
+	set := 0
+	if authority.Key != nil {
+		set++
 	}
-	if (authority.Key != nil && authority.Keyless != nil) ||
-		(authority.Key != nil && authority.Static != nil) ||
-		(authority.Keyless != nil && authority.Static != nil) {
-		errs = errs.Also(apis.ErrMultipleOneOf("key", "keyless", "static"))
-		// Instead of returning all the missing subfields, just return here
-		// to give a more concise and arguably a more meaningful error message.
-		return errs
+	if authority.Keyless != nil {
+		set++
+	}
+	if authority.Static != nil {
+		set++
+	}
+	if authority.GMSignature != nil {
+		set++
+	}
+	if set == 0 {
+		return errs.Also(apis.ErrMissingOneOf("key", "keyless", "static", "gmSignature"))
+	}
+	if set > 1 {
+		return errs.Also(apis.ErrMultipleOneOf("key", "keyless", "static", "gmSignature"))
 	}
 
 	if authority.Key != nil {
@@ -97,6 +105,9 @@ func (authority *Authority) Validate(ctx context.Context) *apis.FieldError {
 	}
 	if authority.Keyless != nil {
 		errs = errs.Also(authority.Keyless.Validate(ctx).ViaField("keyless"))
+	}
+	if authority.GMSignature != nil {
+		errs = errs.Also(authority.GMSignature.Validate(ctx).ViaField("gmSignature"))
 	}
 	if authority.Static != nil {
 		errs = errs.Also(authority.Static.Validate(ctx).ViaField("static"))
@@ -362,4 +373,25 @@ func ValidateRegex(regex string) *apis.FieldError {
 	}
 
 	return nil
+}
+
+// Validate enforces the required fields of GMSignatureRef. Mirrors v1beta1.
+func (gm *GMSignatureRef) Validate(_ context.Context) *apis.FieldError {
+	var errs *apis.FieldError
+	if gm.VerifyURL == "" {
+		errs = errs.Also(apis.ErrMissingField("verifyUrl"))
+	}
+	if gm.TenantID == "" {
+		errs = errs.Also(apis.ErrMissingField("tenantId"))
+	}
+	if gm.Signer.AppID == "" {
+		errs = errs.Also(apis.ErrMissingField("signer.appId"))
+	}
+	if gm.Signer.NodeID == "" {
+		errs = errs.Also(apis.ErrMissingField("signer.nodeId"))
+	}
+	if gm.RequestTimeoutMs < 0 {
+		errs = errs.Also(apis.ErrInvalidValue(gm.RequestTimeoutMs, "requestTimeoutMs", "must be >= 0 (0 = use default)"))
+	}
+	return errs
 }
