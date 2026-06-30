@@ -109,6 +109,39 @@ func TestConversionRoundTripV1alpha1(t *testing.T) {
 				},
 			},
 		},
+	}, {name: "gmSignature 国密 (round-trip preserves every field)",
+		in: &ClusterImagePolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: "test-cip"},
+			Spec: ClusterImagePolicySpec{
+				Images: []ImagePattern{{Glob: "harbor.zjrcu.com/**"}},
+				Authorities: []Authority{
+					{GMSignature: &GMSignatureRef{
+						VerifyURL:        "http://hsm/{tenantId}/{appId}/sm2/verify",
+						TenantID:         "vc02efvv9vqgam0j",
+						RequestTimeoutMs: 8000,
+						Signer: GMSignerRef{
+							AppID:  "00013310",
+							NodeID: "0101",
+							UserID: "1234567812345678",
+						},
+					}},
+				},
+			},
+		},
+	}, {name: "gmSignature with optional userId omitted",
+		in: &ClusterImagePolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: "test-cip"},
+			Spec: ClusterImagePolicySpec{
+				Images: []ImagePattern{{Glob: "**"}},
+				Authorities: []Authority{
+					{GMSignature: &GMSignatureRef{
+						VerifyURL: "http://hsm/{tenantId}/{appId}/sm2/verify",
+						TenantID:  "t1",
+						Signer:    GMSignerRef{AppID: "a", NodeID: "n"},
+					}},
+				},
+			},
+		},
 	}}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
