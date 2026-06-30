@@ -108,6 +108,17 @@ func (authority *Authority) Validate(ctx context.Context) *apis.FieldError {
 	}
 	if authority.GMSignature != nil {
 		errs = errs.Also(authority.GMSignature.Validate(ctx).ViaField("gmSignature"))
+		// Mirror Static's restrictions: Attestations/CTLog/RFC3161Timestamp
+		// don't apply to GM signatures. See v1beta1 for the same set + rationale.
+		if len(authority.Attestations) > 0 {
+			errs = errs.Also(apis.ErrMultipleOneOf("gmSignature", "attestations"))
+		}
+		if authority.CTLog != nil {
+			errs = errs.Also(apis.ErrMultipleOneOf("gmSignature", "ctlog"))
+		}
+		if authority.RFC3161Timestamp != nil {
+			errs = errs.Also(apis.ErrMultipleOneOf("gmSignature", "rfc3161timestamp"))
+		}
 	}
 	if authority.Static != nil {
 		errs = errs.Also(authority.Static.Validate(ctx).ViaField("static"))

@@ -124,6 +124,20 @@ func (authority *Authority) Validate(ctx context.Context) *apis.FieldError {
 	}
 	if authority.GMSignature != nil {
 		errs = errs.Also(authority.GMSignature.Validate(ctx).ViaField("gmSignature"))
+		// Attestations, CTLog, RFC3161Timestamp don't apply to GM signatures.
+		// SBOM/in-toto attestations: not implemented in the GM verify path.
+		// CTLog / TSA: assume x509 certs, which the HSM doesn't issue for SM2.
+		// Sources IS still allowed (gmctl produces same Referrers/tag-based sig
+		// artifact discovery, so source override works).
+		if len(authority.Attestations) > 0 {
+			errs = errs.Also(apis.ErrMultipleOneOf("gmSignature", "attestations"))
+		}
+		if authority.CTLog != nil {
+			errs = errs.Also(apis.ErrMultipleOneOf("gmSignature", "ctlog"))
+		}
+		if authority.RFC3161Timestamp != nil {
+			errs = errs.Also(apis.ErrMultipleOneOf("gmSignature", "rfc3161timestamp"))
+		}
 	}
 	if authority.Static != nil {
 		errs = errs.Also(authority.Static.Validate(ctx).ViaField("static"))
