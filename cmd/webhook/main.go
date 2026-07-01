@@ -272,6 +272,15 @@ func NewValidatingAdmissionController(ctx context.Context, cmw configmap.Watcher
 	kc := kubeclient.Get(ctx)
 	validator := cwebhook.NewValidator(ctx)
 
+	// Capture the GM (国密) singleton client + cache from the root ctx set
+	// up in main(). knative's webhook framework builds a fresh ctx per
+	// admission request; only values re-injected via the withContext callback
+	// below will reach gm.Verify. Without this bridge, ClientFromContext
+	// returns nil and every GM CIP admission fails with
+	//   "GM verifier requested by CIP but HSM Client not initialized"
+	gmClient := gm.ClientFromContext(ctx)
+	gmCache := gm.CacheFromContext(ctx)
+
 	return validation.NewAdmissionController(ctx,
 		// Name of the resource webhook.
 		*webhookName,
@@ -291,6 +300,9 @@ func NewValidatingAdmissionController(ctx context.Context, cmw configmap.Watcher
 			ctx = duckv1.WithPodValidator(ctx, validator.ValidatePod)
 			ctx = duckv1.WithPodSpecValidator(ctx, validator.ValidatePodSpecable)
 			ctx = duckv1.WithCronJobValidator(ctx, validator.ValidateCronJob)
+			// Bridge GM state into per-request ctx (see comment above).
+			ctx = gm.WithClient(ctx, gmClient)
+			ctx = gm.WithCache(ctx, gmCache)
 			return ctx
 		},
 
@@ -314,6 +326,13 @@ func NewMutatingAdmissionController(ctx context.Context, _ configmap.Watcher) *c
 	ctx = webhook.WithOptions(ctx, *woptions)
 	validator := cwebhook.NewValidator(ctx)
 
+	// Same GM ctx bridging as NewValidatingAdmissionController — the current
+	// Resolve* path doesn't call gm.Verify, but keep the two admission paths
+	// symmetric so future ResolvePod additions (e.g. pre-warming HSM cache)
+	// don't hit the same nil-client trap.
+	gmClient := gm.ClientFromContext(ctx)
+	gmCache := gm.CacheFromContext(ctx)
+
 	return defaulting.NewAdmissionController(ctx,
 		// Name of the resource webhook.
 		*webhookName,
@@ -331,6 +350,8 @@ func NewMutatingAdmissionController(ctx context.Context, _ configmap.Watcher) *c
 			ctx = duckv1.WithPodDefaulter(ctx, validator.ResolvePod)
 			ctx = duckv1.WithPodSpecDefaulter(ctx, validator.ResolvePodSpecable)
 			ctx = duckv1.WithCronJobDefaulter(ctx, validator.ResolveCronJob)
+			ctx = gm.WithClient(ctx, gmClient)
+			ctx = gm.WithCache(ctx, gmCache)
 			return ctx
 		},
 
