@@ -92,6 +92,10 @@ spec:
           # 每条 cache entry 有效期。30s 短到 cert 轮换很快失效,长到能吸
           # 收 Pod-burst(节点重启、Deployment scale)。0 = 关缓存。
           value: "30"
+        # 对应上面 custom-ca-bundle volumeMount + volume。启用时同时取消这里的
+        # 注释,让 Go crypto/x509 用这个 PEM 文件作为唯一 CA 池。
+        # - name: SSL_CERT_FILE
+        #   value: /etc/ssl/custom-ca/ca.crt
 
         securityContext:
           allowPrivilegeEscalation: false
@@ -107,6 +111,22 @@ spec:
         - name: tuf-root
           mountPath: "/var/run/tuf"
           readOnly: true
+        # ─────────────────────────────────────────────────────────────
+        # 内网 Harbor / 自签 CA 场景:挂载自定义 CA bundle。
+        # 默认注释,不影响公网集群。启用步骤:
+        #   1. kubectl -n cosign-system create configmap custom-ca-bundle \
+        #        --from-file=ca.crt=/path/to/your/internal-ca-bundle.crt
+        #      (bundle 里可以拼接多张 CA 证书,PEM 格式)
+        #   2. 取消下面 3 段(volumeMounts / volumes / env SSL_CERT_FILE)的注释
+        #   3. kubectl apply -f (再次)policy-controller-*.yaml
+        #   4. 等 webhook rollout,查 log 确认 "fetch signatures" 不再报 TLS
+        # 注意:SSL_CERT_FILE 会替换 Go 默认 CA 池,如果 webhook 需要同时
+        # 信任内网 + 公网 CA,把公网 CA(/etc/ssl/certs/ca-certificates.crt
+        # 里的 PEM)也拼进 configmap 的 ca.crt。仅内网集群不需要。
+        # ─────────────────────────────────────────────────────────────
+        # - name: custom-ca-bundle
+        #   mountPath: /etc/ssl/custom-ca
+        #   readOnly: true
 
         readinessProbe: &probe
           failureThreshold: 6
@@ -133,6 +153,10 @@ spec:
           # This is marked as optional, since if you are using public
           # instance, TUF root is built in to the cosign container.
           optional: true
+      # 对应上面 volumeMounts 的 custom-ca-bundle,取消注释同时启用
+      # - name: custom-ca-bundle
+      #   configMap:
+      #     name: custom-ca-bundle
           items:
           - key: root
             path: root.json
