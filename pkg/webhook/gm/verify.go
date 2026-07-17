@@ -52,8 +52,26 @@ func Verify(
 
 	client := ClientFromContext(ctx)
 	if client == nil {
-		return nil, fmt.Errorf("GM verifier requested by CIP but HSM Client not initialized; " +
-			"check that cmd/webhook/main.go calls gm.WithClient on startup")
+		// This should be impossible in a correctly-built webhook binary: main.go
+		// stamps gm.WithClient on the root ctx, and both admission controllers'
+		// withContext closures re-inject it into the per-request ctx (see fix
+		// commit 5ae181f1). If you see this in production, it's a packaging or
+		// deploy regression, NOT a CIP configuration issue.
+		//
+		// Likely causes (in order of probability):
+		//   1. Webhook Deployment is running a pre-5ae181f1 image (rollout
+		//      didn't complete, or an old image was pulled). Fix:
+		//        kubectl -n cosign-system rollout restart deploy/webhook
+		//        kubectl -n cosign-system rollout status deploy/webhook
+		//   2. Custom admission controller was added but forgot to bridge
+		//      gm.WithClient/WithCache in its withContext closure. See
+		//      cmd/webhook/main.go NewValidatingAdmissionController for the pattern.
+		//   3. Third-party middleware stripped the ctx values.
+		//
+		// Report at https://github.com/coldzerofear/policy-controller/issues
+		// with the webhook image tag and controller-runtime version.
+		return nil, fmt.Errorf("GM verifier: HSM Client missing from admission request context " +
+			"(webhook packaging/deploy issue; try `kubectl -n cosign-system rollout restart deploy/webhook`)")
 	}
 	// cache is optional — nil means "no memoization, every call hits HSM"
 	cache := CacheFromContext(ctx)
